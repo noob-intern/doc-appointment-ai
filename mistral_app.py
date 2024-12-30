@@ -4,21 +4,17 @@ import requests
 from flask import Flask, request, jsonify
 from mistralai import Mistral
 from dotenv import load_dotenv
-import uuid
+import time
 
 load_dotenv()
 
-
 app = Flask(__name__)
 
-
-MISTRAL_API_KEY = os.getenv('MISTRAL_API_KEY')
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 MISTRAL_MODEL = "open-mistral-7b"
-FLASK_API_BASE_URL = "http://127.0.0.1:5000"
-
+FLASK_API_BASE_URL = "http://127.0.0.1:5000"  # Change if your internal schedule API runs elsewhere
 
 mistral_client = Mistral(api_key=MISTRAL_API_KEY)
-
 
 tools = [
     {
@@ -39,7 +35,6 @@ tools = [
     }
 ]
 
-
 def check_timeslot_availability(doctor_id: int, date: str, time: str) -> str:
     """Call the Flask API to check if the given timeslot is available."""
     url = f"{FLASK_API_BASE_URL}/doctors/{doctor_id}/schedule/{date}"
@@ -48,19 +43,14 @@ def check_timeslot_availability(doctor_id: int, date: str, time: str) -> str:
         schedule = response.json().get("schedule", [])
         for slot in schedule:
             if slot["time"] == time:
+                # Return JSON string indicating availability
                 return json.dumps({"available": slot["status"] == "available"})
         return json.dumps({"error": "Timeslot not found."})
     return json.dumps({"error": "Failed to fetch schedule from API."})
 
-
 tools_to_functions = {
     "check_timeslot_availability": check_timeslot_availability,
 }
-
-
-def generate_tool_call_id():
-    return str(uuid.uuid4())
-
 
 @app.route("/chat", methods=["POST"])
 def chatbot():
@@ -68,56 +58,67 @@ def chatbot():
     if not user_message:
         return jsonify({"error": "Message is required."}), 400
 
-    # Step 1: Send user message and tools to Mistral
-    messages = [{"role": "user", "content": user_message}]
+    # 1. Send user message and tools to Mistral
+    messages = [
+        {
+            "role": "user",
+            "content": user_message
+        }
+    ]
+    time.sleep(3)
+
     mistral_response = mistral_client.chat.complete(
-        model=MISTRAL_MODEL, messages=messages, tools=tools, tool_choice="any"
+        model=MISTRAL_MODEL,
+        messages=messages,
+        tools=tools,
+        tool_choice="any",
     )
 
-    # Step 2: Check if there are any tool calls in the Mistral response
+    # 2. Check if there are any tool calls in the Mistral response
     tool_calls = mistral_response.choices[0].message.tool_calls
     if tool_calls:
+        # For demonstration, just handle the first tool call
         tool_call = tool_calls[0]
         function_name = tool_call.function.name
         function_arguments = json.loads(tool_call.function.arguments)
+    
 
         if function_name in tools_to_functions:
+            # 3. Execute the tool/function
             function_result = tools_to_functions[function_name](**function_arguments)
-            tool_call_id = generate_tool_call_id()
-
-            # Append tool_call_id in assistant's tool response
+            
+            # 4. Append the assistant "tool_calls" role with the same ID
             messages.append(
                 {
                     "role": "assistant",
-                    "content": "",
+                    "content": "",  # The actual content is in the tool calls
                     "tool_calls": [
                         {
                             "function": {
                                 "name": function_name,
                                 "arguments": tool_call.function.arguments,
                             },
-                            "tool_call_id": tool_call_id,  # Ensure tool_call_id is added
                         }
                     ],
                 }
             )
 
-            # Include tool_call_id in the tool role response
             messages.append(
                 {
                     "role": "tool",
                     "name": function_name,
                     "content": function_result,
-                    "tool_call_id": tool_call_id,  # Include the ID here
                 }
             )
 
+            time.sleep(3)
+
             final_response = mistral_client.chat.complete(
-                model=MISTRAL_MODEL, messages=messages
+                model=MISTRAL_MODEL,
+                messages=messages,
             )
             return jsonify({"response": final_response.choices[0].message.content})
 
-    # Default response if no tool calls
     return jsonify({"response": mistral_response.choices[0].message.content})
 
 
